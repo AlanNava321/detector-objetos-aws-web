@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.aws/
+credentials
+config
+.env
+.DS_Store

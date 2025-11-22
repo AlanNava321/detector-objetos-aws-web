@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Detector de Objetos IA</title>
+    <script src="https://sdk.amazonaws.com/js/aws-sdk-2.1001.0.min.js"></script>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f4f4f4; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        input, button { padding: 10px; margin: 5px 0; width: 100%; }
+        button { background: #ff9900; color: white; border: none; cursor: pointer; font-weight: bold; }
+        button:hover { background: #ec8d00; }
+        #resultado { margin-top: 20px; font-weight: bold; color: #333; }
+        .credenciales { font-size: 12px; background: #eef; padding: 10px; border: 1px solid #ccd; }
+    </style>
+</head>
+<body>
+
+    <h1>Detector de Objetos con AWS</h1>
+
+    <div class="card">
+        <h3>🔑 Paso 1: Credenciales (Learner Lab)</h3>
+        <p class="credenciales">Pegar los valores de AWS Details:</p>
+        <input type="text" id="accessKey" placeholder="AWS Access Key">
+        <input type="password" id="secretKey" placeholder="AWS Secret Key">
+        <input type="text" id="sessionToken" placeholder="AWS Session Token">
+        <button onclick="configurarAWS()">Guardar Credenciales</button>
+    </div>
+
+    <div class="card">
+        <h3>Sube una Foto</h3>
+        <input type="file" id="fileInput" accept="image/*">
+        <button onclick="subirImagen()">Analizar con IA</button>
+        <p id="estado">Esperando...</p>
+    </div>
+
+    <div class="card">
+        <h3>Resultados (DynamoDB)</h3>
+        <div id="resultado">Los objetos detectados aparecerán aquí...</div>
+    </div>
+
+    <script>
+        // CONFIGURACION
+        const REGION = 'us-east-1';
+        const BUCKET_ENTRADA = '__NOMBRE_BUCKET_PLACEHOLDER__'; 
+        const TABLA_DYNAMO = 'TransripcionesAuto';
+
+        let s3, docClient;
+
+        // Funcion para configurar AWS con las credenciales del usuario
+        function configurarAWS() {
+            const accessKey = document.getElementById('accessKey').value;
+            const secretKey = document.getElementById('secretKey').value;
+            const sessionToken = document.getElementById('sessionToken').value;
+
+            if (!accessKey || !secretKey || !sessionToken) {
+                alert("Por favor llena todos los campos de credenciales");
+                return;
+            }
+
+            AWS.config.update({
+                region: REGION,
+                credentials: new AWS.Credentials(accessKey, secretKey, sessionToken)
+            });
+
+            s3 = new AWS.S3();
+            docClient = new AWS.DynamoDB.DocumentClient();
+            
+            document.getElementById('estado').innerText = "AWS Configurado. Listo para subir.";
+            alert("Credenciales configuradas correctamente");
+        }
+
+        // Funcion para subir imagen a S3
+        async function subirImagen() {
+            const file = document.getElementById('fileInput').files[0];
+            if (!file || !s3) { alert("Selecciona archivo y configura credenciales primero."); return; }
+
+            const nombreArchivo = file.name;
+            document.getElementById('estado').innerText = "Subiendo imagen...";
+
+            try {
+                // Subir a S3
+                await s3.putObject({
+                    Bucket: BUCKET_ENTRADA,
+                    Key: nombreArchivo,
+                    Body: file,
+                    ContentType: file.type
+                }).promise();
+
+                document.getElementById('estado').innerText = "Analizando (Esperando a Lambda)...";
+                
+                // Esperar y consultar DynamoDB
+                pollDynamoDB(nombreArchivo);
+
+            } catch (err) {
+                console.error(err);
+                document.getElementById('estado').innerText = "Error: " + err.message;
+            }
+        }
+
+        // Función de polling para DynamoDB
+        // Se consulta cada 2 segundos hasta 10 intentos
+        function pollDynamoDB(nombreArchivo) {
+            let intentos = 0;
+            const intervalo = setInterval(async () => {
+                intentos++;
+                document.getElementById('estado').innerText = `Consultando base de datos (Intento ${intentos}/10)...`;
+
+                try {
+                    const params = {
+                        TableName: TABLA_DYNAMO,
+                        Key: { 'id_archivo': nombreArchivo }
+                    };
+                    const data = await docClient.get(params).promise();
+
+                    if (data.Item) {
+                        clearInterval(intervalo);
+                        document.getElementById('estado').innerText = "Terminado. Resultados obtenidos.";
+                        // Mostrar etiquetas bonitas
+                        const etiquetas = data.Item.contenido;
+                        document.getElementById('resultado').innerHTML = 
+                            `<ul>${etiquetas.map(e => `<li>${e}</li>`).join('')}</ul>`;
+                    }
+                } catch (err) {
+                    console.log("Aún no está listo...", err);
+                }
+
+                if (intentos >= 10) {
+                    clearInterval(intervalo);
+                    document.getElementById('estado').innerText = "Tiempo de espera agotado. Revisa DynamoDB.";
+                }
+            }, 2000); 
+        }
+    </script>
+</body>
+</html>
